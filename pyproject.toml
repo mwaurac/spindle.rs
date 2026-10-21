@@ -1,0 +1,32 @@
+[project]
+name = "spindle-rs"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Collins Mwaura", email = "cmwambui@proton.me" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "maturin>=1.15.0",
+]
+
+[build-system]
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+bindings = "pyo3"
+features = ["pyo3/extension-module", "pyo3/experimental-inspect"]
+manifest-path = "crates/spindle-py/Cargo.toml"
+module-name = "spindle._core"
+python-source = "src"
+
+[tool.uv]
+# Rebuild the extension when Rust sources change.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "crates/**/Cargo.toml" },
+    { file = "crates/**/*.rs" },
+]
