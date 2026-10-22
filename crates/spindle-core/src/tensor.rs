@@ -1,5 +1,10 @@
+use half::{bf16, f16};
+
+use crate::buffer::Buffer;
+use crate::cpu::CpuBuffer;
 use crate::dtype::Dtype;
-use crate::error::Result;
+use crate::element::Element;
+use crate::error::{Error, Result};
 use crate::layout::Layout;
 use std::{fmt, sync::Arc};
 
@@ -47,10 +52,124 @@ impl Tensor {
             device,
         }))
     }
+
+    /// Contiguous tensor holding a copy of `data`.
+    pub fn from_slice<T: Element>(data: &[T], shape: &[usize], device: Device) -> Result<Self> {
+        let layout = Layout::contiguous(shape, T::DTYPE)?;
+        if layout.numel() != data.len() {
+            return Err(Error::ShapeMismatch {
+                op: "from_slice",
+                lhs: shape.to_vec(),
+                rhs: vec![data.len()],
+            });
+        }
+
+        let buffer = Buffer::from_host(device, CpuBuffer::from_slice(data)?);
+
+        Ok(Self::from_storage(
+            Storage::from_buffer(buffer),
+            layout,
+            device,
+        ))
+    }
+
+    /// Tensor filled with zeros. WOrks for every dtype including quantized ones
     pub fn zeros(shape: &[usize], dtype: Dtype, device: Device) -> Result<Self> {
         let layout = Layout::contiguous(shape, dtype)?;
         let storage = Storage::zeros(device, layout.nbytes())?;
         Ok(Self::from_storage(storage, layout, device))
+    }
+
+    pub fn ones(shape: &[usize], dtype: Dtype, device: Device) -> Result<Self> {
+        Self::full(shape, 1.0, dtype, device)
+    }
+
+    /// Tensor filled with `value`, converted to `dtype` with `as` semantics.
+    /// For `Bool`, any non-zero value is `true`.
+    pub fn full(shape: &[usize], value: f64, dtype: Dtype, device: Device) -> Result<Self> {
+        let layout = Layout::contiguous(shape, dtype)?;
+        let data = generate("full", dtype, layout.numel(), |_| value)?;
+        Ok(Self::from_storage(
+            Storage::from_buffer(Buffer::from_host(device, data)),
+            layout,
+            device,
+        ))
+    }
+
+    /// 1-D tensor of `start, start + step, …` up to but excluding `end`.
+    ///
+    /// Values are computed in f64 as `start + i * step`, so integer ranges are
+    /// exact up to 2^53.
+    pub fn arange(start: f64, end: f64, step: f64, dtype: Dtype, device: Device) -> Result<Self> {
+        if step == 0.0 || !step.is_finite() || !start.is_finite() || !end.is_finite() {
+            return Err(Error::InvalidArgument {
+                op: "arange",
+                msg: format!("invalid range {start}..{end} with step {step}"),
+            });
+        }
+        let n = ((end - start) / step).ceil().max(0.0) as usize;
+        let layout = Layout::contiguous(&[n], dtype)?;
+        let data = generate("arange", dtype, n, |i| start + i as f64 * step)?;
+        Ok(Self::from_storage(
+            Storage::from_buffer(Buffer::from_host(device, data)),
+            layout,
+            device,
+        ))
+    }
+
+    /// Copies the elements out in row-major order. `T` must match the dtype;
+    /// `Bool` tensors read as `u8` (0 or 1).
+    pub fn to_vec<T: Element>(&self) -> Result<Vec<T>> {
+        let dtype = self.dtype();
+        if T::DTYPE != dtype && !(dtype == Dtype::Bool && T::DTYPE == Dtype::U8) {
+            return Err(Error::DtypeMismatch {
+                op: "to_vec",
+                lhs: dtype,
+                rhs: T::DTYPE,
+            });
+        }
+        let layout = self.layout();
+        // TODO: gather strided views once the strided iterator exists.
+        if !layout.is_contiguous() {
+            return Err(Error::InvalidArgument {
+                op: "to_vec",
+                msg: "tensor is not contiguous".into(),
+            });
+        }
+        let start = layout.offset();
+        let bytes = &self.0.storage.host_bytes()[start..start + layout.nbytes()];
+        // Copies rather than casts: the offset may leave `bytes` misaligned for `T`.
+        Ok(bytemuck::pod_collect_to_vec(bytes))
+    }
+}
+
+/// Host buffer of `n` elements of `dtype`, where element `i` is `f(i)`.
+fn generate(
+    op: &'static str,
+    dtype: Dtype,
+    n: usize,
+    f: impl Fn(usize) -> f64,
+) -> Result<CpuBuffer> {
+    fn collect<T: Element>(n: usize, f: impl Fn(usize) -> f64) -> Result<CpuBuffer> {
+        let data: Vec<T> = (0..n).map(|i| T::from_f64(f(i))).collect();
+        CpuBuffer::from_slice(&data)
+    }
+    match dtype {
+        Dtype::F32 => collect::<f32>(n, f),
+        Dtype::F16 => collect::<f16>(n, f),
+        Dtype::BF16 => collect::<bf16>(n, f),
+        Dtype::F64 => collect::<f64>(n, f),
+        Dtype::I8 => collect::<i8>(n, f),
+        Dtype::I16 => collect::<i16>(n, f),
+        Dtype::I32 => collect::<i32>(n, f),
+        Dtype::I64 => collect::<i64>(n, f),
+        Dtype::U8 => collect::<u8>(n, f),
+        Dtype::Bool => collect::<u8>(n, |i| if f(i) != 0.0 { 1.0 } else { 0.0 }),
+        _ => Err(Error::UnsupportedOp {
+            op,
+            dtype,
+            device: Device::CPU,
+        }),
     }
 }
 
@@ -70,14 +189,110 @@ impl fmt::Debug for Tensor {
 mod test {
     use super::*;
 
+    const CPU: Device = Device::CPU;
+
+    #[test]
+    fn from_slice_roundtrip() {
+        let t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], CPU).unwrap();
+        assert_eq!(t.shape(), [2, 3]);
+        assert_eq!(t.dtype(), Dtype::F32);
+        assert_eq!(t.to_vec::<f32>().unwrap(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+        let t = Tensor::from_slice(&[-7i64], &[], CPU).unwrap();
+        assert_eq!(t.to_vec::<i64>().unwrap(), [-7]);
+
+        let t = Tensor::from_slice(&[f16::from_f32(1.5)], &[1], CPU).unwrap();
+        assert_eq!(t.dtype(), Dtype::F16);
+        assert_eq!(t.to_vec::<f16>().unwrap(), [f16::from_f32(1.5)]);
+    }
+
+    #[test]
+    fn from_slice_wrong_len() {
+        assert!(matches!(
+            Tensor::from_slice(&[1.0f32, 2.0, 3.0], &[2, 2], CPU),
+            Err(Error::ShapeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn to_vec_wrong_type() {
+        let t = Tensor::from_slice(&[1i32, 2], &[2], CPU).unwrap();
+        assert!(matches!(
+            t.to_vec::<f32>(),
+            Err(Error::DtypeMismatch {
+                lhs: Dtype::I32,
+                rhs: Dtype::F32,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn zeros() {
-        let t = Tensor::zeros(&[4, 64], Dtype::Q8_0, Device::CPU).unwrap();
-        assert_eq!(t.shape(), [4, 64]);
+        let t = Tensor::zeros(&[2, 2], Dtype::BF16, CPU).unwrap();
+        assert_eq!(t.to_vec::<bf16>().unwrap(), [bf16::ZERO; 4]);
+
+        let t = Tensor::zeros(&[4, 64], Dtype::Q8_0, CPU).unwrap();
         assert_eq!(t.storage_len(), 4 * 2 * 34);
         assert_eq!(
             format!("{t:?}"),
             "Tensor(shape=[4, 64], dtype=q8_0, device=CPU)"
         );
+    }
+
+    #[test]
+    fn ones_and_full() {
+        let t = Tensor::ones(&[3], Dtype::F16, CPU).unwrap();
+        assert_eq!(t.to_vec::<f16>().unwrap(), [f16::ONE; 3]);
+
+        let t = Tensor::full(&[2, 2], -3.7, Dtype::I32, CPU).unwrap();
+        assert_eq!(t.to_vec::<i32>().unwrap(), [-3; 4]);
+
+        let t = Tensor::full(&[], 2.5, Dtype::F64, CPU).unwrap();
+        assert_eq!(t.to_vec::<f64>().unwrap(), [2.5]);
+
+        let t = Tensor::full(&[2], 0.5, Dtype::Bool, CPU).unwrap();
+        assert_eq!(t.to_vec::<u8>().unwrap(), [1, 1]);
+    }
+
+    #[test]
+    fn full_quantized_unsupported() {
+        assert!(matches!(
+            Tensor::full(&[32], 1.0, Dtype::Q4_0, CPU),
+            Err(Error::UnsupportedOp { op: "full", .. })
+        ));
+    }
+
+    #[test]
+    fn arange() {
+        let t = Tensor::arange(0.0, 5.0, 1.0, Dtype::I64, CPU).unwrap();
+        assert_eq!(t.shape(), [5]);
+        assert_eq!(t.to_vec::<i64>().unwrap(), [0, 1, 2, 3, 4]);
+
+        let t = Tensor::arange(0.0, 1.0, 0.25, Dtype::F32, CPU).unwrap();
+        assert_eq!(t.to_vec::<f32>().unwrap(), [0.0, 0.25, 0.5, 0.75]);
+
+        let t = Tensor::arange(3.0, 0.0, -1.0, Dtype::I32, CPU).unwrap();
+        assert_eq!(t.to_vec::<i32>().unwrap(), [3, 2, 1]);
+
+        // Non-integral span rounds the count up.
+        let t = Tensor::arange(0.0, 1.0, 0.3, Dtype::F64, CPU).unwrap();
+        assert_eq!(t.shape(), [4]);
+    }
+
+    #[test]
+    fn arange_empty_and_invalid() {
+        let t = Tensor::arange(5.0, 0.0, 1.0, Dtype::F32, CPU).unwrap();
+        assert_eq!(t.shape(), [0]);
+        assert_eq!(t.to_vec::<f32>().unwrap(), [] as [f32; 0]);
+
+        assert!(matches!(
+            Tensor::arange(0.0, 5.0, 0.0, Dtype::F32, CPU),
+            Err(Error::InvalidArgument { op: "arange", .. })
+        ));
+        assert!(matches!(
+            Tensor::arange(0.0, f64::INFINITY, 1.0, Dtype::F32, CPU),
+            Err(Error::InvalidArgument { .. })
+        ));
     }
 }

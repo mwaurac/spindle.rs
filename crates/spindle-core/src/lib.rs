@@ -2,6 +2,7 @@ pub mod buffer;
 pub(crate) mod cpu;
 pub mod device;
 pub mod dtype;
+pub mod element;
 pub mod error;
 pub mod layout;
 pub mod quant;

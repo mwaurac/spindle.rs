@@ -53,6 +53,33 @@ impl Tensor {
             self.device()
         )
     }
+
+    // ctors
+    #[new]
+    #[pyo3(signature = (shape, dtype = "f32", device = "cpu"))]
+    fn new(shape: Vec<usize>, dtype: &str, device: &str) -> PyResult<Self> {
+        let inner = CoreTensor::zeros(&shape, parse_dtype(dtype)?, parse_device(device)?)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (shape, dtype = "f32", device = "cpu"))]
+    fn zeros(shape: Vec<usize>, dtype: &str, device: &str) -> PyResult<Self> {
+        let inner = CoreTensor::zeros(&shape, parse_dtype(dtype)?, parse_device(device)?)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (shape, dtype = "f32", device = "cpu"))]
+    fn ones(shape: Vec<usize>, dtype: &str, device: &str) -> PyResult<Self> {
+        let inner = CoreTensor::ones(&shape, parse_dtype(dtype)?, parse_device(device)?)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(Self { inner })
+    }
 }
 
 #[pymodule]

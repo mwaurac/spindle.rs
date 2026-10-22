@@ -16,6 +16,10 @@ q6_k = "q6_k"
 cpu = "cpu"
 
 
+def zeros(shape: List[float], dtype: str = f32, device: str = cpu) -> Tensor:
+    return Tensor.zeros(shape, dtype, device)
+
+
 __all__ = [
     "Tensor",
     "bf16",

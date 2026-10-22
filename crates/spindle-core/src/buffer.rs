@@ -13,6 +13,13 @@ impl Buffer {
         })
     }
 
+    /// MOves host data onto `device`
+    pub fn from_host(device: Device, data: CpuBuffer) -> Self {
+        match device {
+            Device::CPU => Buffer::Cpu(data),
+        }
+    }
+
     pub fn alloc_uninit(device: Device, len: usize) -> Result<Self> {
         Ok(match device {
             Device::CPU => Buffer::Cpu(unsafe { CpuBuffer::alloc_uninit(len) }?),
@@ -22,6 +29,13 @@ impl Buffer {
     pub fn len(&self) -> usize {
         match self {
             Buffer::Cpu(b) => b.len(),
+        }
+    }
+
+    /// The buffer's bytes in host memory
+    pub fn host_bytes(&self) -> &[u8] {
+        match self {
+            Buffer::Cpu(b) => b.as_bytes(),
         }
     }
 }
