@@ -129,17 +129,30 @@ impl Tensor {
             });
         }
         let layout = self.layout();
-        // TODO: gather strided views once the strided iterator exists.
-        if !layout.is_contiguous() {
-            return Err(Error::InvalidArgument {
-                op: "to_vec",
-                msg: "tensor is not contiguous".into(),
-            });
+        let bytes = self.0.storage.host_bytes();
+        if layout.is_contiguous() {
+            let start = layout.offset();
+            // Copies rather than casts: the offset may leave the bytes misaligned for `T`.
+            return Ok(bytemuck::pod_collect_to_vec(
+                &bytes[start..start + layout.nbytes()],
+            ));
         }
-        let start = layout.offset();
-        let bytes = &self.0.storage.host_bytes()[start..start + layout.nbytes()];
-        // Copies rather than casts: the offset may leave `bytes` misaligned for `T`.
-        Ok(bytemuck::pod_collect_to_vec(bytes))
+        let size = dtype.type_size();
+        let mut out = Vec::with_capacity(layout.nbytes());
+        for offset in layout.offsets() {
+            out.extend_from_slice(&bytes[offset..offset + size]);
+        }
+        Ok(bytemuck::pod_collect_to_vec(&out))
+    }
+
+    // View of the same storage with a different layout.
+    #[cfg_attr(not(test), allow(dead_code))] // used by the view ops
+    pub(crate) fn with_layout(&self, layout: Layout) -> Self {
+        Tensor(Arc::new(TensorImpl_ {
+            storage: Arc::clone(&self.0.storage),
+            layout,
+            device: self.0.device,
+        }))
     }
 }
 
@@ -212,6 +225,24 @@ mod test {
             Tensor::from_slice(&[1.0f32, 2.0, 3.0], &[2, 2], CPU),
             Err(Error::ShapeMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn to_vec_strided() {
+        // [[0, 1, 2], [3, 4, 5]]
+        let t = Tensor::arange(0.0, 6.0, 1.0, Dtype::I32, CPU).unwrap();
+
+        // Transpose: [[0, 3], [1, 4], [2, 5]]
+        let tt = t.with_layout(Layout::from_parts(&[3, 2], &[4, 12], 0, Dtype::I32).unwrap());
+        assert_eq!(tt.to_vec::<i32>().unwrap(), [0, 3, 1, 4, 2, 5]);
+
+        // Last column, broadcast to [2, 2]: [[2, 2], [5, 5]]
+        let col = t.with_layout(Layout::from_parts(&[2, 2], &[12, 0], 8, Dtype::I32).unwrap());
+        assert_eq!(col.to_vec::<i32>().unwrap(), [2, 2, 5, 5]);
+
+        // Contiguous slice with an offset: the second row.
+        let row = t.with_layout(Layout::from_parts(&[3], &[4], 12, Dtype::I32).unwrap());
+        assert_eq!(row.to_vec::<i32>().unwrap(), [3, 4, 5]);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use crate::dtype::Dtype;
 use crate::error::{Error, Result};
+use crate::strided::StridedOffsets;
 
-const MAX_DIMS: usize = 6;
+pub const MAX_DIMS: usize = 6;
 
 pub struct Layout {
     ndim: u8,
@@ -93,6 +94,36 @@ impl Layout {
         Ok(layout)
     }
 
+    /// Layout with explicit byte strides and offset, as produced by views.
+    ///
+    /// Only the rank is validated; callers must ensure every offset the layout
+    /// reaches lies inside the buffer it is used with.
+    #[cfg_attr(not(test), allow(dead_code))] // used by the view ops
+    pub(crate) fn from_parts(
+        shape: &[usize],
+        strides: &[usize],
+        offset: usize,
+        dtype: Dtype,
+    ) -> Result<Self> {
+        let ndim = shape.len();
+        check_dims(ndim)?;
+        assert_eq!(strides.len(), ndim, "one stride per dim");
+        let mut layout = Self {
+            ndim: ndim as u8,
+            shape: padded(shape, 1),
+            strides: [0; MAX_DIMS],
+            dtype,
+            offset,
+        };
+        layout.strides[MAX_DIMS - ndim..].copy_from_slice(strides);
+        Ok(layout)
+    }
+
+    /// Byte offsets of every element (block, for quantized dtypes) in
+    /// row-major order.
+    pub fn offsets(&self) -> StridedOffsets {
+        StridedOffsets::new(self)
+    }
     /// Byte strides this shape would have if it were contiguous, in slot form
     /// (padding slots are 0)
     /// Zero-sized dims are treated as size 1 so strides stay non-zero, like Pytorch
