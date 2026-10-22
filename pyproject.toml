@@ -12,6 +12,7 @@ dependencies = [
 [dependency-groups]
 dev = [
   "maturin>=1.15.0",
+  "pytest>=9.1.1",
 ]
 
 [build-system]
