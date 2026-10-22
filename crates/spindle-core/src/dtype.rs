@@ -30,32 +30,37 @@ pub enum Dtype {
 }
 
 impl Dtype {
+    pub const ALL: [Dtype; 22] = [
+        Dtype::F32,
+        Dtype::F16,
+        Dtype::Q4_0,
+        Dtype::Q4_1,
+        Dtype::Q5_0,
+        Dtype::Q5_1,
+        Dtype::Q8_0,
+        Dtype::Q8_1,
+        Dtype::Q2_K,
+        Dtype::Q3_K,
+        Dtype::Q4_K,
+        Dtype::Q5_K,
+        Dtype::Q6_K,
+        Dtype::Q8_K,
+        Dtype::I8,
+        Dtype::I16,
+        Dtype::I32,
+        Dtype::I64,
+        Dtype::F64,
+        Dtype::BF16,
+        Dtype::U8,
+        Dtype::Bool,
+    ];
+
     pub fn from_u32(v: u32) -> Option<Dtype> {
-        Some(match v {
-            0 => Dtype::F32,
-            1 => Dtype::F16,
-            2 => Dtype::Q4_0,
-            3 => Dtype::Q4_1,
-            6 => Dtype::Q5_0,
-            7 => Dtype::Q5_1,
-            8 => Dtype::Q8_0,
-            9 => Dtype::Q8_1,
-            10 => Dtype::Q2_K,
-            11 => Dtype::Q3_K,
-            12 => Dtype::Q4_K,
-            13 => Dtype::Q5_K,
-            14 => Dtype::Q6_K,
-            15 => Dtype::Q8_K,
-            24 => Dtype::I8,
-            25 => Dtype::I16,
-            26 => Dtype::I32,
-            27 => Dtype::I64,
-            28 => Dtype::F64,
-            30 => Dtype::BF16,
-            256 => Dtype::U8,
-            257 => Dtype::Bool,
-            _ => return None,
-        })
+        Self::ALL.into_iter().find(|&dt| dt as u32 == v)
+    }
+
+    pub fn from_name(name: &str) -> Option<Dtype> {
+        Self::ALL.into_iter().find(|dt| dt.as_str() == name)
     }
 
     pub fn as_str(&self) -> &'static str {
@@ -160,37 +165,14 @@ impl Dtype {
 mod test {
     use super::*;
 
-    const ALL: [Dtype; 22] = [
-        Dtype::F32,
-        Dtype::F16,
-        Dtype::Q4_0,
-        Dtype::Q4_1,
-        Dtype::Q5_0,
-        Dtype::Q5_1,
-        Dtype::Q8_0,
-        Dtype::Q8_1,
-        Dtype::Q2_K,
-        Dtype::Q3_K,
-        Dtype::Q4_K,
-        Dtype::Q5_K,
-        Dtype::Q6_K,
-        Dtype::Q8_K,
-        Dtype::I8,
-        Dtype::I16,
-        Dtype::I32,
-        Dtype::I64,
-        Dtype::F64,
-        Dtype::BF16,
-        Dtype::U8,
-        Dtype::Bool,
-    ];
-
     #[test]
-    fn id_roundtrip() {
-        for dt in ALL {
+    fn id_and_name_roundtrip() {
+        for dt in Dtype::ALL {
+            assert_eq!(Dtype::from_name(dt.as_str()), Some(dt));
             assert_eq!(Dtype::from_u32(dt as u32), Some(dt));
         }
         assert_eq!(Dtype::from_u32(4), None);
+        assert_eq!(Dtype::from_name("f8"), None);
     }
 
     #[test]
@@ -216,7 +198,7 @@ mod test {
 
     #[test]
     fn categories_are_disjoint() {
-        for dt in ALL {
+        for dt in Dtype::ALL {
             let n = [dt.is_float(), dt.is_int(), dt.is_quantized()]
                 .iter()
                 .filter(|&&b| b)

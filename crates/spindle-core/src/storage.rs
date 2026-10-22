@@ -10,4 +10,8 @@ impl Storage {
             buffer: Buffer::alloc_zeroed(device, len)?,
         })
     }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
 }

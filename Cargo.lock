@@ -133,6 +133,7 @@ name = "spindle-py"
 version = "0.1.0"
 dependencies = [
  "pyo3",
+ "spindle-core",
 ]
 
 [[package]]
