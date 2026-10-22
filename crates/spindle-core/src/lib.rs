@@ -4,5 +4,6 @@ pub mod device;
 pub mod dtype;
 pub mod error;
 pub mod layout;
+pub mod quant;
 pub mod storage;
 pub mod tensor;

@@ -91,7 +91,7 @@ impl Dtype {
     }
 
     /// Size in bytes of one block (one element for a non-quantized type)
-    pub fn type_size(&self) -> usize {
+    pub const fn type_size(&self) -> usize {
         match self {
             Dtype::Bool | Dtype::U8 | Dtype::I8 => 1,
             Dtype::F16 | Dtype::BF16 | Dtype::I16 => 2,

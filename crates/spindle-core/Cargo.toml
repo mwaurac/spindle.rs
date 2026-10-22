@@ -8,3 +8,4 @@ keywords.workspace = true
 
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
+half = { version = "2.7.1", features = ["bytemuck"] }
