@@ -1,11 +1,12 @@
 use std::fmt;
 
-use crate::device::Device;
+use crate::{device::Device, dtype::Dtype};
 
 #[derive(Debug)]
 pub enum Error {
     TooManyDims { ndim: usize, max: usize },
     OutOfMemory { device: Device, bytes: usize },
+    BlockMisaligned { dtype: Dtype, shape: Vec<usize> },
 }
 
 impl fmt::Display for Error {
@@ -17,6 +18,13 @@ impl fmt::Display for Error {
             Error::OutOfMemory { device, bytes } => {
                 write!(f, "Out of memory allocating {bytes} on {device:?}")
             }
+
+            Error::BlockMisaligned { dtype, shape } => write!(
+                f,
+                "shape {shape:?} is invalid for {}: the innermost dim must be a multiple of {}",
+                dtype.as_str(),
+                dtype.block_size()
+            ),
         }
     }
 }
