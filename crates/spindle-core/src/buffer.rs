@@ -15,7 +15,13 @@ impl Buffer {
 
     pub fn alloc_uninit(device: Device, len: usize) -> Result<Self> {
         Ok(match device {
-            Device::CPU => Buffer::Cpu(CpuBuffer::alloc_uninit(len)?),
+            Device::CPU => Buffer::Cpu(unsafe { CpuBuffer::alloc_uninit(len) }?),
         })
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Buffer::Cpu(b) => b.len(),
+        }
     }
 }

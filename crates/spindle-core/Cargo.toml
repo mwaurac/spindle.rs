@@ -7,3 +7,4 @@ description.workspace = true
 keywords.workspace = true
 
 [dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
