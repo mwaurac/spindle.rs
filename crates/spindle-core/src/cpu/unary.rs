@@ -1,10 +1,14 @@
-use std::ops::{Add, Div, Mul, Neg};
+//! Reference kernels for elementwise unary ops.
 
 use bytemuck::Pod;
 use half::{bf16, f16};
 
+use super::{
+    CpuBuffer,
+    num::{Int, Real},
+    read,
+};
 use crate::{
-    cpu::CpuBuffer,
     device::Device,
     dtype::Dtype,
     error::{Error, Result},
@@ -12,16 +16,16 @@ use crate::{
     ops::UnaryOp,
 };
 
+/// Applies `op` to every element of the tensor described by `bytes` and
+/// `layout`, producing a contiguous buffer of the same dtype.
 pub fn unary(op: UnaryOp, bytes: &[u8], layout: &Layout) -> Result<CpuBuffer> {
     let unsupported = || Error::UnsupportedOp {
         op: op.name(),
         dtype: layout.dtype(),
         device: Device::CPU,
     };
-
     match layout.dtype() {
         Dtype::F32 => map(bytes, layout, float_fn::<f32>(op)),
-
         Dtype::F64 => map(bytes, layout, float_fn::<f64>(op)),
         Dtype::F16 => {
             let f = float_fn::<f32>(op);
@@ -41,57 +45,9 @@ pub fn unary(op: UnaryOp, bytes: &[u8], layout: &Layout) -> Result<CpuBuffer> {
 }
 
 fn map<T: Pod>(bytes: &[u8], layout: &Layout, f: impl Fn(T) -> T) -> Result<CpuBuffer> {
-    let size = size_of::<T>();
-    let out: Vec<T> = layout
-        .offsets()
-        .map(|o| f(bytemuck::pod_read_unaligned(&bytes[o..o + size])))
-        .collect();
+    let out: Vec<T> = layout.offsets().map(|o| f(read(bytes, o))).collect();
     CpuBuffer::from_slice(&out)
 }
-
-trait Real:
-    Copy
-    + PartialOrd
-    + Neg<Output = Self>
-    + Add<Output = Self>
-    + Mul<Output = Self>
-    + Div<Output = Self>
-{
-    const ZERO: Self;
-    const ONE: Self;
-    const HALF: Self;
-    /// `sqrt(2 / π)`
-    const SQRT_2_OVER_PI: Self;
-    const GELU_COEF: Self;
-
-    fn abs(self) -> Self;
-    fn exp(self) -> Self;
-    fn ln(self) -> Self;
-    fn sqrt(self) -> Self;
-    fn tanh(self) -> Self;
-}
-
-macro_rules! impl_real {
-    ($($t:ident),*) => {$(
-        impl Real for $t {
-            const ZERO: Self = 0.0;
-            const ONE: Self = 1.0;
-            const HALF: Self = 0.5;
-            // 2/√π · 1/√2 = √(2/π)
-            const SQRT_2_OVER_PI: Self =
-                std::$t::consts::FRAC_2_SQRT_PI * std::$t::consts::FRAC_1_SQRT_2;
-            const GELU_COEF: Self = 0.044_715;
-
-            fn abs(self) -> Self { <$t>::abs(self) }
-            fn exp(self) -> Self { <$t>::exp(self) }
-            fn ln(self) -> Self { <$t>::ln(self) }
-            fn sqrt(self) -> Self { <$t>::sqrt(self) }
-            fn tanh(self) -> Self { <$t>::tanh(self) }
-        }
-    )*};
-}
-
-impl_real!(f32, f64);
 
 fn float_fn<F: Real>(op: UnaryOp) -> fn(F) -> F {
     fn sigmoid<F: Real>(x: F) -> F {
@@ -112,34 +68,6 @@ fn float_fn<F: Real>(op: UnaryOp) -> fn(F) -> F {
             let inner = F::SQRT_2_OVER_PI * (x + F::GELU_COEF * x * x * x);
             F::HALF * x * (F::ONE + inner.tanh())
         },
-    }
-}
-
-trait Int: Copy + Ord {
-    const ZERO: Self;
-    fn wrapping_neg(self) -> Self;
-    fn wrapping_abs(self) -> Self;
-}
-
-macro_rules! impl_signed {
-    ($($t:ty),*) => {$(
-        impl Int for $t {
-            const ZERO: Self = 0;
-            fn wrapping_neg(self) -> Self { <$t>::wrapping_neg(self) }
-            fn wrapping_abs(self) -> Self { <$t>::wrapping_abs(self) }
-        }
-    )*};
-}
-
-impl_signed!(i8, i16, i32, i64);
-
-impl Int for u8 {
-    const ZERO: Self = 0;
-    fn wrapping_neg(self) -> Self {
-        u8::wrapping_neg(self)
-    }
-    fn wrapping_abs(self) -> Self {
-        self
     }
 }
 

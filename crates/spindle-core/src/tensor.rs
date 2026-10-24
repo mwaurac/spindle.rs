@@ -6,7 +6,7 @@ use crate::dtype::Dtype;
 use crate::element::Element;
 use crate::error::{Error, Result};
 use crate::layout::Layout;
-use crate::ops::UnaryOp;
+use crate::ops::{BinaryOp, UnaryOp};
 use std::{fmt, sync::Arc};
 
 use crate::{device::Device, storage::Storage};
@@ -121,6 +121,41 @@ impl Tensor {
         Ok(Self::from_host(data, layout, device))
     }
 
+    /// Applies an elementwise binary op, broadcasting both operands to a common
+    /// shape and returning a new contiguous tensor.
+    pub fn binary(&self, rhs: &Tensor, op: BinaryOp) -> Result<Self> {
+        let (dtype, device) = (self.dtype(), self.device());
+        if rhs.dtype() != dtype {
+            return Err(Error::DtypeMismatch {
+                op: op.name(),
+                lhs: dtype,
+                rhs: rhs.dtype(),
+            });
+        }
+        let shape =
+            crate::layout::broadcast_shapes(self.shape(), rhs.shape()).ok_or_else(|| {
+                Error::ShapeMismatch {
+                    op: op.name(),
+                    lhs: self.shape().to_vec(),
+                    rhs: rhs.shape().to_vec(),
+                }
+            })?;
+        let lhs_layout = self
+            .layout()
+            .broadcast_to(&shape)
+            .expect("shapes broadcast");
+        let rhs_layout = rhs.layout().broadcast_to(&shape).expect("shapes broadcast");
+        let data = match device {
+            Device::CPU => cpu::binary::binary(
+                op,
+                (self.0.storage.host_bytes(), &lhs_layout),
+                (rhs.0.storage.host_bytes(), &rhs_layout),
+            )?,
+        };
+        let layout = Layout::contiguous(&shape, dtype)?;
+        Ok(Self::from_host(data, layout, device))
+    }
+
     /// Copies the elements out in row-major order. `T` must match the dtype;
     /// `Bool` tensors read as `u8` (0 or 1).
     pub fn to_vec<T: Element>(&self) -> Result<Vec<T>> {
@@ -226,6 +261,28 @@ unary_methods! {
     silu => Silu,
     gelu => Gelu,
 }
+
+macro_rules! binary_methods {
+    ($($name:ident => $op:ident),* $(,)?) => {
+        impl Tensor {$(
+            #[doc = concat!("Elementwise [`BinaryOp::", stringify!($op), "`], with broadcasting.")]
+            pub fn $name(&self, rhs: &Tensor) -> Result<Self> {
+                self.binary(rhs, BinaryOp::$op)
+            }
+        )*}
+    };
+}
+
+binary_methods! {
+    add => Add,
+    sub => Sub,
+    mul => Mul,
+    div => Div,
+    pow => Pow,
+    maximum => Maximum,
+    minimum => Minimum,
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

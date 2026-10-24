@@ -39,3 +39,35 @@ impl UnaryOp {
         }
     }
 }
+
+/// Elementwise binary operations, with broadcasting.
+///
+/// Every op is defined on float dtypes. `Add`, `Sub`, `Mul`, `Maximum` and
+/// `Minimum` are also defined on integer dtypes, where arithmetic wraps on
+/// overflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Pow,
+    /// Elementwise maximum; NaN if either input is NaN.
+    Maximum,
+    /// Elementwise minimum; NaN if either input is NaN.
+    Minimum,
+}
+
+impl BinaryOp {
+    pub fn name(&self) -> &'static str {
+        match self {
+            BinaryOp::Add => "add",
+            BinaryOp::Sub => "sub",
+            BinaryOp::Mul => "mul",
+            BinaryOp::Div => "div",
+            BinaryOp::Pow => "pow",
+            BinaryOp::Maximum => "maximum",
+            BinaryOp::Minimum => "minimum",
+        }
+    }
+}

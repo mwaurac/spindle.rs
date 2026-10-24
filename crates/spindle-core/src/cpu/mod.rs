@@ -1,3 +1,5 @@
+pub mod binary;
+pub mod num;
 pub mod unary;
 
 use bytemuck::Pod;
@@ -9,6 +11,10 @@ use std::{
     alloc::{self},
     ptr::NonNull,
 };
+/// Reads a `T` at byte `offset`, which need not be aligned for `T`.
+fn read<T: Pod>(bytes: &[u8], offset: usize) -> T {
+    bytemuck::pod_read_unaligned(&bytes[offset..offset + size_of::<T>()])
+}
 
 pub const ALIGN: usize = 64;
 

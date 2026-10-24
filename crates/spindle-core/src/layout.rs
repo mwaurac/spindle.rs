@@ -124,6 +124,33 @@ impl Layout {
     pub fn offsets(&self) -> StridedOffsets {
         StridedOffsets::new(self)
     }
+
+    /// View of this layout broadcast to `shape`: dims of size 1 and missing
+    /// leading dims are repeated with stride 0. `None` if the shapes are
+    /// incompatible.
+    pub fn broadcast_to(&self, shape: &[usize]) -> Option<Self> {
+        if shape.len() > MAX_DIMS || shape.len() < self.ndim() {
+            return None;
+        }
+        let mut layout = Self {
+            ndim: shape.len() as u8,
+            shape: padded(shape, 1),
+            strides: [0; MAX_DIMS],
+            dtype: self.dtype,
+            offset: self.offset,
+        };
+        // Slot by slot: keep the stride where sizes match, repeat (stride 0)
+        // where the source has size 1. Padding slots have size 1.
+        for i in 0..MAX_DIMS {
+            if self.shape[i] == layout.shape[i] {
+                layout.strides[i] = self.strides[i];
+            } else if self.shape[i] != 1 {
+                return None;
+            }
+        }
+        Some(layout)
+    }
+
     /// Byte strides this shape would have if it were contiguous, in slot form
     /// (padding slots are 0)
     /// Zero-sized dims are treated as size 1 so strides stay non-zero, like Pytorch
@@ -158,6 +185,24 @@ impl Layout {
         let expected = self.contiguous_strides();
         (0..MAX_DIMS).all(|i| self.shape[i] == 1 || self.strides[i] == expected[i])
     }
+}
+
+pub fn broadcast_shapes(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
+    let ndim = a.len().max(b.len());
+    if ndim > MAX_DIMS {
+        return None;
+    }
+    let (a, b) = (padded(a, 1), padded(b, 1));
+    let mut out = [1; MAX_DIMS];
+    for i in 0..MAX_DIMS {
+        out[i] = match (a[i], b[i]) {
+            (x, y) if x == y => x,
+            (1, y) => y,
+            (x, 1) => x,
+            _ => return None,
+        };
+    }
+    Some(out[MAX_DIMS - ndim..].to_vec())
 }
 
 #[cfg(test)]
@@ -244,5 +289,35 @@ mod test {
         assert_eq!(l.nbytes(), 0);
         assert_eq!(l.strides(), [12, 4]);
         assert!(l.is_contiguous());
+    }
+
+    #[test]
+    fn broadcast_shapes_rules() {
+        assert_eq!(broadcast_shapes(&[2, 3], &[2, 3]), Some(vec![2, 3]));
+        assert_eq!(broadcast_shapes(&[2, 3], &[3]), Some(vec![2, 3]));
+        assert_eq!(broadcast_shapes(&[4, 1, 3], &[2, 1]), Some(vec![4, 2, 3]));
+        assert_eq!(broadcast_shapes(&[], &[5, 2]), Some(vec![5, 2]));
+        assert_eq!(broadcast_shapes(&[0, 3], &[1, 3]), Some(vec![0, 3]));
+        assert_eq!(broadcast_shapes(&[2, 3], &[2]), None);
+        assert_eq!(broadcast_shapes(&[0], &[2]), None);
+    }
+
+    #[test]
+    fn broadcast_to() {
+        // [3] → [2, 3]: new leading dim gets stride 0.
+        let l = Layout::contiguous(&[3], Dtype::F32).unwrap();
+        let b = l.broadcast_to(&[2, 3]).unwrap();
+        assert_eq!(b.shape(), [2, 3]);
+        assert_eq!(b.strides(), [0, 4]);
+
+        // [2, 1] → [2, 4]: size-1 dim gets stride 0, the rest keep theirs.
+        let l = Layout::from_parts(&[2, 1], &[8, 4], 16, Dtype::F32).unwrap();
+        let b = l.broadcast_to(&[2, 4]).unwrap();
+        assert_eq!(b.strides(), [8, 0]);
+        assert_eq!(b.offset(), 16);
+
+        assert!(l.broadcast_to(&[3, 4]).is_none());
+        assert!(l.broadcast_to(&[4]).is_none());
+        assert!(l.broadcast_to(&[1; MAX_DIMS + 1]).is_none());
     }
 }
