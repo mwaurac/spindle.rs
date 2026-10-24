@@ -1,11 +1,12 @@
 use half::{bf16, f16};
 
 use crate::buffer::Buffer;
-use crate::cpu::CpuBuffer;
+use crate::cpu::{self, CpuBuffer};
 use crate::dtype::Dtype;
 use crate::element::Element;
 use crate::error::{Error, Result};
 use crate::layout::Layout;
+use crate::ops::UnaryOp;
 use std::{fmt, sync::Arc};
 
 use crate::{device::Device, storage::Storage};
@@ -53,6 +54,12 @@ impl Tensor {
         }))
     }
 
+    /// Contiguous tensor on `device` with the contents of a host buffer.
+    fn from_host(data: CpuBuffer, layout: Layout, device: Device) -> Self {
+        let storage = Storage::from_buffer(Buffer::from_host(device, data));
+        Self::from_storage(storage, layout, device)
+    }
+
     /// Contiguous tensor holding a copy of `data`.
     pub fn from_slice<T: Element>(data: &[T], shape: &[usize], device: Device) -> Result<Self> {
         let layout = Layout::contiguous(shape, T::DTYPE)?;
@@ -63,14 +70,8 @@ impl Tensor {
                 rhs: vec![data.len()],
             });
         }
-
-        let buffer = Buffer::from_host(device, CpuBuffer::from_slice(data)?);
-
-        Ok(Self::from_storage(
-            Storage::from_buffer(buffer),
-            layout,
-            device,
-        ))
+        let data = CpuBuffer::from_slice(data)?;
+        Ok(Self::from_host(data, layout, device))
     }
 
     /// Tensor filled with zeros. WOrks for every dtype including quantized ones
@@ -89,11 +90,7 @@ impl Tensor {
     pub fn full(shape: &[usize], value: f64, dtype: Dtype, device: Device) -> Result<Self> {
         let layout = Layout::contiguous(shape, dtype)?;
         let data = generate("full", dtype, layout.numel(), |_| value)?;
-        Ok(Self::from_storage(
-            Storage::from_buffer(Buffer::from_host(device, data)),
-            layout,
-            device,
-        ))
+        Ok(Self::from_host(data, layout, device))
     }
 
     /// 1-D tensor of `start, start + step, …` up to but excluding `end`.
@@ -110,11 +107,18 @@ impl Tensor {
         let n = ((end - start) / step).ceil().max(0.0) as usize;
         let layout = Layout::contiguous(&[n], dtype)?;
         let data = generate("arange", dtype, n, |i| start + i as f64 * step)?;
-        Ok(Self::from_storage(
-            Storage::from_buffer(Buffer::from_host(device, data)),
-            layout,
-            device,
-        ))
+
+        Ok(Self::from_host(data, layout, device))
+    }
+
+    /// Applies an elementwise unary op, returning a new contiguous tensor.
+    pub fn unary(&self, op: UnaryOp) -> Result<Self> {
+        let (dtype, device) = (self.dtype(), self.device());
+        let data = match device {
+            Device::CPU => cpu::unary::unary(op, self.0.storage.host_bytes(), self.layout())?,
+        };
+        let layout = Layout::contiguous(self.shape(), dtype)?;
+        Ok(Self::from_host(data, layout, device))
     }
 
     /// Copies the elements out in row-major order. `T` must match the dtype;
@@ -198,6 +202,30 @@ impl fmt::Debug for Tensor {
     }
 }
 
+macro_rules! unary_methods {
+    ($($name:ident => $op:ident),* $(,)?) => {
+        impl Tensor {$(
+            #[doc = concat!("Elementwise [`UnaryOp::", stringify!($op), "`].")]
+            pub fn $name(&self) -> Result<Self> {
+                self.unary(UnaryOp::$op)
+            }
+        )*}
+    };
+}
+
+unary_methods! {
+    neg => Neg,
+    abs => Abs,
+    exp => Exp,
+    log => Log,
+    sqrt => Sqrt,
+    rsqrt => Rsqrt,
+    tanh => Tanh,
+    sigmoid => Sigmoid,
+    relu => Relu,
+    silu => Silu,
+    gelu => Gelu,
+}
 #[cfg(test)]
 mod test {
     use super::*;

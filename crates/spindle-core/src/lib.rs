@@ -5,6 +5,7 @@ pub mod dtype;
 pub mod element;
 pub mod error;
 pub mod layout;
+pub mod ops;
 pub mod quant;
 pub mod storage;
 pub mod strided;
