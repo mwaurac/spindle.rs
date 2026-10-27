@@ -1,4 +1,5 @@
 pub mod binary;
+pub mod compare;
 pub mod num;
 pub mod unary;
 

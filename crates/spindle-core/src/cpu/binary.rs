@@ -49,12 +49,13 @@ pub fn binary(op: BinaryOp, lhs: (&[u8], &Layout), rhs: (&[u8], &Layout)) -> Res
     }
 }
 
-fn zip_map<T: Pod>(
+/// Applies `f` to pairs of elements read from two layouts of the same shape
+pub(super) fn zip_map<T: Pod, U: Pod>(
     (lhs, lhs_layout): (&[u8], &Layout),
     (rhs, rhs_layout): (&[u8], &Layout),
-    f: impl Fn(T, T) -> T,
+    f: impl Fn(T, T) -> U,
 ) -> Result<CpuBuffer> {
-    let out: Vec<T> = lhs_layout
+    let out: Vec<U> = lhs_layout
         .offsets()
         .zip(rhs_layout.offsets())
         .map(|(a, b)| f(read(lhs, a), read(rhs, b)))

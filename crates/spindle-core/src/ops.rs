@@ -71,3 +71,30 @@ impl BinaryOp {
         }
     }
 }
+
+/// Elementwise comparisons, with broadcasting. The result is a `Bool` tensor.
+///
+/// Floats compare with IEEE semantics: every comparison with NaN is false
+/// except `Ne`. `Bool` inputs compare as 0 and 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl CmpOp {
+    pub fn name(&self) -> &'static str {
+        match self {
+            CmpOp::Eq => "eq",
+            CmpOp::Ne => "ne",
+            CmpOp::Lt => "lt",
+            CmpOp::Le => "le",
+            CmpOp::Gt => "gt",
+            CmpOp::Ge => "ge",
+        }
+    }
+}

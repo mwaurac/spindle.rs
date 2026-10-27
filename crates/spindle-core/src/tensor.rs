@@ -6,7 +6,7 @@ use crate::dtype::Dtype;
 use crate::element::Element;
 use crate::error::{Error, Result};
 use crate::layout::Layout;
-use crate::ops::{BinaryOp, UnaryOp};
+use crate::ops::{BinaryOp, CmpOp, UnaryOp};
 use std::{fmt, sync::Arc};
 
 use crate::{device::Device, storage::Storage};
@@ -121,30 +121,42 @@ impl Tensor {
         Ok(Self::from_host(data, layout, device))
     }
 
-    /// Applies an elementwise binary op, broadcasting both operands to a common
-    /// shape and returning a new contiguous tensor.
-    pub fn binary(&self, rhs: &Tensor, op: BinaryOp) -> Result<Self> {
-        let (dtype, device) = (self.dtype(), self.device());
-        if rhs.dtype() != dtype {
+    /// Checks that `self` and `rhs` share a dtype and broadcast together, and
+    /// returns the broadcast shape with both layouts expanded to it.
+    fn broadcast_pair(
+        &self,
+        rhs: &Tensor,
+        op: &'static str,
+    ) -> Result<(Vec<usize>, Layout, Layout)> {
+        if rhs.dtype() != self.dtype() {
             return Err(Error::DtypeMismatch {
-                op: op.name(),
-                lhs: dtype,
+                op,
+                lhs: self.dtype(),
                 rhs: rhs.dtype(),
             });
         }
         let shape =
             crate::layout::broadcast_shapes(self.shape(), rhs.shape()).ok_or_else(|| {
                 Error::ShapeMismatch {
-                    op: op.name(),
+                    op,
                     lhs: self.shape().to_vec(),
                     rhs: rhs.shape().to_vec(),
                 }
             })?;
-        let lhs_layout = self
+        let lhs = self
             .layout()
             .broadcast_to(&shape)
             .expect("shapes broadcast");
-        let rhs_layout = rhs.layout().broadcast_to(&shape).expect("shapes broadcast");
+        let rhs = rhs.layout().broadcast_to(&shape).expect("shapes broadcast");
+        Ok((shape, lhs, rhs))
+    }
+    /// Applies an elementwise binary op, broadcasting both operands to a common
+    /// shape and returning a new contiguous tensor.
+    /// Applies an elementwise binary op, broadcasting both operands to a common
+    /// shape and returning a new contiguous tensor.
+    pub fn binary(&self, rhs: &Tensor, op: BinaryOp) -> Result<Self> {
+        let (dtype, device) = (self.dtype(), self.device());
+        let (shape, lhs_layout, rhs_layout) = self.broadcast_pair(rhs, op.name())?;
         let data = match device {
             Device::CPU => cpu::binary::binary(
                 op,
@@ -156,6 +168,54 @@ impl Tensor {
         Ok(Self::from_host(data, layout, device))
     }
 
+    /// Compares elementwise with broadcasting, returning a `Bool` tensor.
+    pub fn compare(&self, rhs: &Tensor, op: CmpOp) -> Result<Self> {
+        let device = self.device();
+        let (shape, lhs_layout, rhs_layout) = self.broadcast_pair(rhs, op.name())?;
+        let data = match device {
+            Device::CPU => cpu::compare::compare(
+                op,
+                (self.0.storage.host_bytes(), &lhs_layout),
+                (rhs.0.storage.host_bytes(), &rhs_layout),
+            )?,
+        };
+        let layout = Layout::contiguous(&shape, Dtype::Bool)?;
+        Ok(Self::from_host(data, layout, device))
+    }
+
+    /// Elementwise select: `on_true` where this `Bool` tensor is true and
+    /// `on_false` elsewhere. All three broadcast to a common shape.
+    pub fn where_cond(&self, on_true: &Tensor, on_false: &Tensor) -> Result<Self> {
+        const OP: &str = "where_cond";
+        if self.dtype() != Dtype::Bool {
+            return Err(Error::DtypeMismatch {
+                op: OP,
+                lhs: self.dtype(),
+                rhs: Dtype::Bool,
+            });
+        }
+        let (values_shape, _, _) = on_true.broadcast_pair(on_false, OP)?;
+        let shape =
+            crate::layout::broadcast_shapes(self.shape(), &values_shape).ok_or_else(|| {
+                Error::ShapeMismatch {
+                    op: OP,
+                    lhs: self.shape().to_vec(),
+                    rhs: values_shape.clone(),
+                }
+            })?;
+        let expand = |t: &Tensor| t.layout().broadcast_to(&shape).expect("shapes broadcast");
+        let (dtype, device) = (on_true.dtype(), self.device());
+        let data = match device {
+            Device::CPU => cpu::compare::where_cond(
+                (self.0.storage.host_bytes(), &expand(self)),
+                (on_true.0.storage.host_bytes(), &expand(on_true)),
+                (on_false.0.storage.host_bytes(), &expand(on_false)),
+                dtype,
+            )?,
+        };
+        let layout = Layout::contiguous(&shape, dtype)?;
+        Ok(Self::from_host(data, layout, device))
+    }
     /// Copies the elements out in row-major order. `T` must match the dtype;
     /// `Bool` tensors read as `u8` (0 or 1).
     pub fn to_vec<T: Element>(&self) -> Result<Vec<T>> {
@@ -281,6 +341,26 @@ binary_methods! {
     pow => Pow,
     maximum => Maximum,
     minimum => Minimum,
+}
+
+macro_rules! compare_methods {
+    ($($name:ident => $op:ident),* $(,)?) => {
+        impl Tensor {$(
+            #[doc = concat!("Elementwise [`CmpOp::", stringify!($op), "`], with broadcasting.")]
+            pub fn $name(&self, rhs: &Tensor) -> Result<Self> {
+                self.compare(rhs, CmpOp::$op)
+            }
+        )*}
+    };
+}
+
+compare_methods! {
+    eq => Eq,
+    ne => Ne,
+    lt => Lt,
+    le => Le,
+    gt => Gt,
+    ge => Ge,
 }
 
 #[cfg(test)]
