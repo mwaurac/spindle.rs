@@ -98,7 +98,6 @@ impl Layout {
     ///
     /// Only the rank is validated; callers must ensure every offset the layout
     /// reaches lies inside the buffer it is used with.
-    #[cfg_attr(not(test), allow(dead_code))] // used by the view ops
     pub(crate) fn from_parts(
         shape: &[usize],
         strides: &[usize],

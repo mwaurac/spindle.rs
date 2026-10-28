@@ -6,7 +6,7 @@ use crate::dtype::Dtype;
 use crate::element::Element;
 use crate::error::{Error, Result};
 use crate::layout::Layout;
-use crate::ops::{BinaryOp, CmpOp, UnaryOp};
+use crate::ops::{BinaryOp, CmpOp, ReduceOp, UnaryOp};
 use std::{fmt, sync::Arc};
 
 use crate::{device::Device, storage::Storage};
@@ -216,6 +216,46 @@ impl Tensor {
         let layout = Layout::contiguous(&shape, dtype)?;
         Ok(Self::from_host(data, layout, device))
     }
+
+    /// Reduces over `dim`. With `keepdim` the reduced dim stays as size 1,
+    /// otherwise it is removed.
+    pub fn reduce(&self, op: ReduceOp, dim: usize, keepdim: bool) -> Result<Self> {
+        let (dtype, device, shape) = (self.dtype(), self.device(), self.shape());
+        if dim >= shape.len() {
+            return Err(Error::InvalidArgument {
+                op: op.name(),
+                msg: format!(
+                    "dim {dim} is out of range for a tensor with {} dims",
+                    shape.len()
+                ),
+            });
+        }
+        let out_dtype = op.output_dtype(dtype).ok_or(Error::UnsupportedOp {
+            op: op.name(),
+            dtype,
+            device,
+        })?;
+        if shape[dim] == 0 && op.needs_elements() {
+            return Err(Error::InvalidArgument {
+                op: op.name(),
+                msg: format!("cannot reduce empty dim {dim}"),
+            });
+        }
+        let data = match device {
+            Device::CPU => {
+                cpu::reduce::reduce(op, self.0.storage.host_bytes(), self.layout(), dim)?
+            }
+        };
+        let mut out_shape = shape.to_vec();
+        if keepdim {
+            out_shape[dim] = 1;
+        } else {
+            out_shape.remove(dim);
+        }
+        let layout = Layout::contiguous(&out_shape, out_dtype)?;
+        Ok(Self::from_host(data, layout, device))
+    }
+
     /// Copies the elements out in row-major order. `T` must match the dtype;
     /// `Bool` tensors read as `u8` (0 or 1).
     pub fn to_vec<T: Element>(&self) -> Result<Vec<T>> {
@@ -361,6 +401,26 @@ compare_methods! {
     le => Le,
     gt => Gt,
     ge => Ge,
+}
+
+macro_rules! reduce_methods {
+    ($($name:ident => $op:ident),* $(,)?) => {
+        impl Tensor {$(
+            #[doc = concat!("[`ReduceOp::", stringify!($op), "`] over `dim`.")]
+            pub fn $name(&self, dim: usize, keepdim: bool) -> Result<Self> {
+                self.reduce(ReduceOp::$op, dim, keepdim)
+            }
+        )*}
+    };
+}
+
+reduce_methods! {
+    sum => Sum,
+    mean => Mean,
+    max => Max,
+    min => Min,
+    argmax => Argmax,
+    argmin => Argmin,
 }
 
 #[cfg(test)]

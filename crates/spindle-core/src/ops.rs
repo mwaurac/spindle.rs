@@ -1,3 +1,5 @@
+use crate::dtype::Dtype;
+
 /// Elementwise unary operations.
 ///
 /// Every op is defined on float dtypes. `Neg`, `Abs` and `Relu` are also
@@ -96,5 +98,54 @@ impl CmpOp {
             CmpOp::Gt => "gt",
             CmpOp::Ge => "ge",
         }
+    }
+}
+
+/// Reductions over one dim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReduceOp {
+    /// Floats keep their dtype; integers and `Bool` sum into `I64`.
+    Sum,
+    /// Float dtypes only. NaN over an empty dim.
+    Mean,
+    /// NaN if any element is NaN.
+    Max,
+    /// NaN if any element is NaN.
+    Min,
+    /// `I64` index of the first maximum; a NaN counts as the maximum.
+    Argmax,
+    /// `I64` index of the first minimum; a NaN counts as the minimum.
+    Argmin,
+}
+
+impl ReduceOp {
+    pub fn name(&self) -> &'static str {
+        match self {
+            ReduceOp::Sum => "sum",
+            ReduceOp::Mean => "mean",
+            ReduceOp::Max => "max",
+            ReduceOp::Min => "min",
+            ReduceOp::Argmax => "argmax",
+            ReduceOp::Argmin => "argmin",
+        }
+    }
+
+    /// Dtype of the result for an input of `dtype`, or `None` if unsupported.
+    pub fn output_dtype(&self, dtype: Dtype) -> Option<Dtype> {
+        if dtype.is_quantized() {
+            return None;
+        }
+        match self {
+            ReduceOp::Sum if dtype.is_float() => Some(dtype),
+            ReduceOp::Sum => Some(Dtype::I64),
+            ReduceOp::Mean => dtype.is_float().then_some(dtype),
+            ReduceOp::Max | ReduceOp::Min => Some(dtype),
+            ReduceOp::Argmax | ReduceOp::Argmin => Some(Dtype::I64),
+        }
+    }
+
+    /// Whether the op has no value over an empty dim.
+    pub fn needs_elements(&self) -> bool {
+        !matches!(self, ReduceOp::Sum | ReduceOp::Mean)
     }
 }

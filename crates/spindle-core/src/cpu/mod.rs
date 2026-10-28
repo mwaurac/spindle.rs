@@ -1,6 +1,7 @@
 pub mod binary;
 pub mod compare;
 pub mod num;
+pub mod reduce;
 pub mod unary;
 
 use bytemuck::Pod;
