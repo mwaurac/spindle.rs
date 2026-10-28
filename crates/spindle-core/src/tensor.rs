@@ -256,6 +256,99 @@ impl Tensor {
         Ok(Self::from_host(data, layout, device))
     }
 
+    /// Matrix product with PyTorch semantics: `[..., m, k] @ [..., k, n]` with
+    /// broadcast batch dims. A 1-D left operand is treated as `[1, k]` and a
+    /// 1-D right operand as `[k, 1]`, and the added dim is removed from the
+    /// result.
+    pub fn matmul(&self, rhs: &Tensor) -> Result<Self> {
+        const OP: &str = "matmul";
+        let (dtype, device) = (self.dtype(), self.device());
+        if rhs.dtype() != dtype {
+            return Err(Error::DtypeMismatch {
+                op: OP,
+                lhs: dtype,
+                rhs: rhs.dtype(),
+            });
+        }
+        if self.layout().ndim() == 0 || rhs.layout().ndim() == 0 {
+            return Err(Error::InvalidArgument {
+                op: OP,
+                msg: "both operands need at least one dim".into(),
+            });
+        }
+        let mismatch = || Error::ShapeMismatch {
+            op: OP,
+            lhs: self.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        };
+
+        // Promote vectors to matrices with a stride-0 unit dim.
+        let as_matrix = |layout: &Layout, left: bool| {
+            let dtype = layout.dtype();
+            if layout.ndim() != 1 {
+                return Layout::from_parts(
+                    layout.shape(),
+                    layout.strides(),
+                    layout.offset(),
+                    dtype,
+                )
+                .expect("existing layout fits");
+            }
+            let (n, stride, offset) = (layout.shape()[0], layout.strides()[0], layout.offset());
+            let parts = if left {
+                Layout::from_parts(&[1, n], &[0, stride], offset, dtype)
+            } else {
+                Layout::from_parts(&[n, 1], &[stride, 0], offset, dtype)
+            };
+            parts.expect("rank 2 fits")
+        };
+        let (lhs_layout, rhs_layout) = (
+            as_matrix(self.layout(), true),
+            as_matrix(rhs.layout(), false),
+        );
+        let (lhs_nd, rhs_nd) = (lhs_layout.ndim(), rhs_layout.ndim());
+        let (m, k) = (
+            lhs_layout.shape()[lhs_nd - 2],
+            lhs_layout.shape()[lhs_nd - 1],
+        );
+        let (rhs_k, n) = (
+            rhs_layout.shape()[rhs_nd - 2],
+            rhs_layout.shape()[rhs_nd - 1],
+        );
+        if k != rhs_k {
+            return Err(mismatch());
+        }
+        let batch = crate::layout::broadcast_shapes(
+            &lhs_layout.shape()[..lhs_nd - 2],
+            &rhs_layout.shape()[..rhs_nd - 2],
+        )
+        .ok_or_else(mismatch)?;
+        let with_batch = |rows, cols| [batch.as_slice(), &[rows, cols]].concat();
+        let lhs_layout = lhs_layout
+            .broadcast_to(&with_batch(m, k))
+            .ok_or_else(mismatch)?;
+        let rhs_layout = rhs_layout
+            .broadcast_to(&with_batch(k, n))
+            .ok_or_else(mismatch)?;
+
+        let data = match device {
+            Device::CPU => cpu::matmul::matmul(
+                (self.0.storage.host_bytes(), &lhs_layout),
+                (rhs.0.storage.host_bytes(), &rhs_layout),
+                dtype,
+            )?,
+        };
+        let mut shape = batch;
+        if self.layout().ndim() > 1 {
+            shape.push(m);
+        }
+        if rhs.layout().ndim() > 1 {
+            shape.push(n);
+        }
+        let layout = Layout::contiguous(&shape, dtype)?;
+        Ok(Self::from_host(data, layout, device))
+    }
+
     /// Copies the elements out in row-major order. `T` must match the dtype;
     /// `Bool` tensors read as `u8` (0 or 1).
     pub fn to_vec<T: Element>(&self) -> Result<Vec<T>> {
