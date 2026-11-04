@@ -4,6 +4,7 @@ use crate::strided::StridedOffsets;
 
 pub const MAX_DIMS: usize = 6;
 
+#[derive(Debug, PartialEq)]
 pub struct Layout {
     ndim: u8,
     shape: [usize; MAX_DIMS],

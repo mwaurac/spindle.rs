@@ -349,6 +349,31 @@ impl Tensor {
         Ok(Self::from_host(data, layout, device))
     }
 
+    /// Converts to `dtype`, returning a new contigous tensor. Casting to the
+    /// current dtype returns a handle to the same data without copying.
+    ///
+    /// Float -> int truncates toward zero and saturates (NaN becomes 0),
+    /// int -> int wraps and anything -> `Bool` is `x != 0`. Block quantized dtypes
+    /// are not supported.
+    ///
+    pub fn cast(&self, dtype: Dtype) -> Result<Self> {
+        if dtype == self.dtype() {
+            return Ok(Tensor(Arc::clone(&self.0)));
+        }
+
+        let device = self.device();
+        let data = match device {
+            Device::CPU => cpu::cast::cast(
+                self.0.storage.host_bytes(),
+                self.layout(),
+                self.dtype(),
+                dtype,
+            )?,
+        };
+        let layout = Layout::contiguous(self.shape(), dtype)?;
+        Ok(Self::from_host(data, layout, device))
+    }
+
     /// Copies the elements out in row-major order. `T` must match the dtype;
     /// `Bool` tensors read as `u8` (0 or 1).
     pub fn to_vec<T: Element>(&self) -> Result<Vec<T>> {

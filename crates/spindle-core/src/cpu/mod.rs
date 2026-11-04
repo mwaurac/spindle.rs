@@ -1,4 +1,5 @@
 pub mod binary;
+pub mod cast;
 pub mod compare;
 pub mod matmul;
 pub mod num;
